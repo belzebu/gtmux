@@ -97,6 +97,9 @@ any key in the menu's *broadcast a key*. Key names are case-insensitive
 
 ### Monitor
 
+Logging is **off by default** (`GTMUX_LOG=on` or menu *start logging* to enable).
+Opening a monitor auto-starts logging, since it needs the logs to tail.
+
 `Prefix m` → enter a selection (`1-4`, `1,3,5`, `1-3,7`, `all`) → opens a tiled
 window that `tail -F`s each chosen host's log. Multiple monitors can coexist;
 they're listed in the sidebar. Each pane's border shows freshness:
@@ -114,6 +117,7 @@ to the host's own window or broadcast.
 | `GTMUX_SIDEBAR_W` | `20%` | sidebar width (`%` or fixed cols) |
 | `GTMUX_MON_FRESH` | `3` | seconds within which a monitored log counts as `●live` |
 | `GTMUX_LANG` | `zh` | UI language: `zh`, `en`, or `auto` (detect from `$LANG`) |
+| `GTMUX_LOG` | `off` | auto-start per-host logging at `open` (`off`/`on`) |
 
 Set at `open` and stored on the session (survives detach/attach). Switch it
 **live** from the menu (`Prefix Space` → *Language*) — the menu relabels and the

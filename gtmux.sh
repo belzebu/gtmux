@@ -23,7 +23,7 @@
 #   gtmux help                # this help
 #
 # Env: GTMUX_SESSION=gtmux  GTMUX_KEY=Space  IPS_FILE=./ip.txt  LOGROOT=.
-#      GTMUX_SIDEBAR_W=20%   GTMUX_MON_FRESH=3   GTMUX_LANG=zh|en|auto
+#      GTMUX_SIDEBAR_W=20%   GTMUX_MON_FRESH=3   GTMUX_LANG=zh|en|auto   GTMUX_LOG=off|on
 set -u
 
 SESSION="${GTMUX_SESSION:-gtmux}"
@@ -34,6 +34,7 @@ LOGROOT="${LOGROOT:-.}"
 MENU_KEY="${GTMUX_KEY:-Space}"
 SIDEBAR_W="${GTMUX_SIDEBAR_W:-20%}" # % scales with the screen; or fixed cols e.g. 30
 MON_FRESH="${GTMUX_MON_FRESH:-3}"   # monitor: log mtime within N s counts as ●live
+GTMUX_LOG="${GTMUX_LOG:-off}"       # auto-start per-host logging at open: off|on
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 # ---- i18n -------------------------------------------------------------------
@@ -88,7 +89,7 @@ load_lang() {
     [note_prefix]="註:-p 只在 -n 模式有效,ip.txt 模式忽略"
     [err_session_exists]="session '%s' 已存在 → '%s attach' 或 '%s kill'"
     [err_mkdir_log]="無法建立 log 目錄: %s"
-    [opened]="已開 %d 台(焦點模式,純 shell 未 ssh)。log → %s/<host>.log"
+    [opened]="已開 %d 台(純 shell 未 ssh,log 預設關)。log 目錄 %s(選單 l 開 log)"
     [opened_hint]="進入後:Prefix ↑↓ 換台 · Prefix+%s 選單 · Prefix b 廣播"
     [no_session]="session 不存在" [rebound]="已重新綁定快捷鍵"
     [status_right]="Prefix+%s 選單 · Prefix ↑↓ 換台 · Prefix b 廣播"
@@ -132,7 +133,7 @@ else
     [note_prefix]="note: -p only applies with -n; ignored for ip.txt"
     [err_session_exists]="session '%s' exists → '%s attach' or '%s kill'"
     [err_mkdir_log]="cannot create log dir: %s"
-    [opened]="opened %d hosts (focus mode, plain shells, no ssh). log → %s/<host>.log"
+    [opened]="opened %d hosts (plain shells, no ssh, logging off). log dir %s (menu 'l' to start)"
     [opened_hint]="inside: Prefix ↑↓ switch · Prefix+%s menu · Prefix b broadcast"
     [no_session]="no such session" [rebound]="keys rebound"
     [status_right]="Prefix+%s menu · Prefix ↑↓ switch · Prefix b broadcast"
@@ -251,8 +252,9 @@ build_window() {
   tmux set -p -t "$side" @gtmux side
   tmux set -p -t "$dev" @gtmux dev
   tmux select-pane -t "$dev" -T "$ip"
-  tmux pipe-pane -t "$dev" "cat >> '$d/${ip}.log'" # logging on from start
-  tmux select-pane -t "$dev"                       # focus the host shell, not sidebar
+  # logging is off by default (GTMUX_LOG=on to auto-start, or menu 'l' later)
+  [[ "$GTMUX_LOG" == on ]] && tmux pipe-pane -t "$dev" "cat >> '$d/${ip}.log'"
+  tmux select-pane -t "$dev" # focus the host shell, not sidebar
 }
 
 action_open() {
@@ -626,6 +628,9 @@ action_monitor() {
     tmux display-message "$(t mon_badsel)"
     return
   }
+  # monitoring tails the per-host logs → make sure logging is flowing
+  _LOGD="$logd"
+  foreach_dev _cb_logon
   local mname="mon-${sel// /}"                      # name carries the selection
   tmux kill-window -t "$SESSION:$mname" 2>/dev/null # same selection replaces, others coexist
   local title
