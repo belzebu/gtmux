@@ -23,7 +23,7 @@
 #   gtmux help                # this help
 #
 # Env: GTMUX_SESSION=gtmux  GTMUX_KEY=Space  IPS_FILE=./ip.txt  LOGROOT=.
-#      GTMUX_SIDEBAR_W=20%   GTMUX_MON_FRESH=3   GTMUX_LANG=auto|en|zh
+#      GTMUX_SIDEBAR_W=20%   GTMUX_MON_FRESH=3   GTMUX_LANG=zh|en|auto
 set -u
 
 SESSION="${GTMUX_SESSION:-gtmux}"
@@ -37,9 +37,9 @@ MON_FRESH="${GTMUX_MON_FRESH:-3}"   # monitor: log mtime within N s counts as â—
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 # ---- i18n -------------------------------------------------------------------
-# All user-facing strings live in one table per language. Default is en;
-# set GTMUX_LANG=zh to force Chinese, or GTMUX_LANG=auto to detect from $LANG.
-GTMUX_LANG="${GTMUX_LANG:-en}"
+# All user-facing strings live in one table per language. Default is zh;
+# set GTMUX_LANG=en to force English, or GTMUX_LANG=auto to detect from $LANG.
+GTMUX_LANG="${GTMUX_LANG:-zh}"
 if [[ "$GTMUX_LANG" == auto ]]; then
   case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
   zh* | *[._]zh* | *ZH*) GTMUX_LANG=zh ;;
