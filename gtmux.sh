@@ -15,6 +15,7 @@
 #
 # Usage:
 #   gtmux open                # read ip.txt, lay out, enter
+#   gtmux open -f hosts.txt   # use a specific host-list file
 #   gtmux open -n 5           # N blank panes (no ip.txt), numbered 1..5
 #   gtmux open -n 5 -p dut-   # N panes labelled dut-1 .. dut-5
 #   gtmux open -l /tmp/logs   # log dir (default: ./)
@@ -272,6 +273,10 @@ action_open() {
       ;;
     -l)
       logbase="${2:-}"
+      shift 2
+      ;;
+    -f)
+      [[ -n "${2:-}" ]] && IPS_FILE="$2"
       shift 2
       ;;
     *)
@@ -873,7 +878,7 @@ _setlang)
   action_setlang "$@"
   ;;
 *)
-  echo "usage: $0 [open [-n N] [-p PREFIX] [-l LOGPATH] | attach | kill | help]" >&2
+  echo "usage: $0 [open [-f HOSTFILE] [-n N] [-p PREFIX] [-l LOGPATH] | attach | kill | help]" >&2
   exit 2
   ;;
 esac

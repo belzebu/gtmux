@@ -51,11 +51,14 @@ chmod +x ~/gtmux/gtmux.sh
 # from a directory containing ip.txt (one host per line):
 ./gtmux.sh open
 
-# or no host file — just N blank panes:
-./gtmux.sh open -n 5
+./gtmux.sh open -f hosts.txt     # use a specific host-list file
+./gtmux.sh open -n 5             # no host file — just N blank panes
 ./gtmux.sh open -n 5 -p dut-     # labels dut-1 .. dut-5
 ./gtmux.sh open -l /tmp/logs     # custom log dir (default: ./)
 ```
+
+(Or set `IPS_FILE=/path/hosts.txt`. With no host file and no `-n`, `open`
+prompts interactively for a count/file, prefix and log path.)
 
 `open` only lays out the panes (plain shells, **no auto-ssh**). Connect via the
 menu (`c` = ssh all) or type into a host yourself.
