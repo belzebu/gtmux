@@ -1,0 +1,12 @@
+# generated at runtime
+gen4_logs/
+*.log
+*.clean.txt
+.devices
+.dir-*
+
+# your real host list (commit ip.txt.example instead)
+ip.txt
+
+# OS cruft
+.DS_Store
