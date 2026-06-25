@@ -78,6 +78,8 @@ if [[ "$GTMUX_LANG" == zh ]]; then
     [logpath_changed]="log 路徑改為 %s(%d 台已重指)" [mkdir_fail]="無法建立: %s"
     [err_no_ipfile]="找不到 %s" [err_empty_ipfile]="%s 沒有任何主機"
     [err_count]="-n 需要正整數: %s"
+    [setup_prompt]="沒有 ip.txt — 輸入主機數量,或清單檔路徑(空白取消):"
+    [setup_cancel]="已取消" [setup_badfile]="不是數字也不是可讀檔: %s"
     [note_prefix]="註:-p 只在 -n 模式有效,ip.txt 模式忽略"
     [err_session_exists]="session '%s' 已存在 → '%s attach' 或 '%s kill'"
     [err_mkdir_log]="無法建立 log 目錄: %s"
@@ -116,6 +118,8 @@ else
     [logpath_changed]="log path → %s (%d hosts repointed)" [mkdir_fail]="cannot create: %s"
     [err_no_ipfile]="not found: %s" [err_empty_ipfile]="%s has no hosts"
     [err_count]="-n needs a positive integer: %s"
+    [setup_prompt]="No ip.txt — number of hosts, or a host-file path (blank cancels):"
+    [setup_cancel]="cancelled" [setup_badfile]="not a number or a readable file: %s"
     [note_prefix]="note: -p only applies with -n; ignored for ip.txt"
     [err_session_exists]="session '%s' exists → '%s attach' or '%s kill'"
     [err_mkdir_log]="cannot create log dir: %s"
@@ -236,6 +240,39 @@ action_open() {
   done
   [[ -n "$logbase" ]] && LOGROOT="$logbase"
 
+  # Decide the host list: -n N (manual) / ip.txt / interactive setup if neither.
+  if [[ -n "$count" ]]; then
+    : # validated + generated below
+  elif read_ips 2>/dev/null; then
+    [[ -n "$prefix" ]] && {
+      t note_prefix >&2
+      echo >&2
+    }
+  elif [[ -t 0 ]]; then
+    # no usable ip.txt and no -n, but we have a terminal → ask
+    tf err_no_ipfile "$IPS_FILE" >&2
+    echo >&2
+    local ans
+    read -rp "$(t setup_prompt) " ans
+    if [[ -z "$ans" ]]; then
+      t setup_cancel >&2
+      echo >&2
+      return 1
+    elif [[ "$ans" =~ ^[0-9]+$ ]]; then
+      count="$ans"
+    elif [[ -r "$ans" ]]; then
+      IPS_FILE="$ans"
+      read_ips || return 1
+    else
+      tf setup_badfile "$ans" >&2
+      echo >&2
+      return 1
+    fi
+  else
+    read_ips || return 1 # non-interactive: surface the real error
+  fi
+
+  # Generate labels from a count (set by -n or by interactive setup).
   if [[ -n "$count" ]]; then
     if ! [[ "$count" =~ ^[0-9]+$ ]] || ((count < 1)); then
       tf err_count "$count" >&2
@@ -245,12 +282,6 @@ action_open() {
     IPS=()
     local k
     for ((k = 1; k <= count; k++)); do IPS+=("${prefix}${k}"); done
-  else
-    [[ -n "$prefix" ]] && {
-      t note_prefix >&2
-      echo >&2
-    }
-    read_ips || return 1
   fi
 
   if has_session; then
