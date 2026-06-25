@@ -82,7 +82,8 @@ load_lang() {
     [logpath_changed]="log 路徑改為 %s(%d 台已重指)" [mkdir_fail]="無法建立: %s"
     [err_no_ipfile]="找不到 %s" [err_empty_ipfile]="%s 沒有任何主機"
     [err_count]="-n 需要正整數: %s"
-    [setup_prompt]="沒有 ip.txt — 數量或清單檔[ -p 前綴][ -l log路徑](空白取消):"
+    [setup_p1]="① 數量或清單檔(空白取消):" [setup_p2]="② 標籤前綴(空白=無):"
+    [setup_p3]="③ log 路徑(空白=預設):"
     [setup_cancel]="已取消" [setup_badfile]="不是數字也不是可讀檔: %s"
     [note_prefix]="註:-p 只在 -n 模式有效,ip.txt 模式忽略"
     [err_session_exists]="session '%s' 已存在 → '%s attach' 或 '%s kill'"
@@ -125,7 +126,8 @@ else
     [logpath_changed]="log path → %s (%d hosts repointed)" [mkdir_fail]="cannot create: %s"
     [err_no_ipfile]="not found: %s" [err_empty_ipfile]="%s has no hosts"
     [err_count]="-n needs a positive integer: %s"
-    [setup_prompt]="No ip.txt — count or host-file [-p prefix] [-l logpath] (blank cancels):"
+    [setup_p1]="① count or host-file (blank cancels):" [setup_p2]="② label prefix (blank = none):"
+    [setup_p3]="③ log path (blank = default):"
     [setup_cancel]="cancelled" [setup_badfile]="not a number or a readable file: %s"
     [note_prefix]="note: -p only applies with -n; ignored for ip.txt"
     [err_session_exists]="session '%s' exists → '%s attach' or '%s kill'"
@@ -287,49 +289,33 @@ action_open() {
       echo >&2
     }
   elif [[ -t 0 ]]; then
-    # no usable ip.txt and no -n, but we have a terminal → ask.
-    # The answer is parsed like open args: "<N|file> [-p prefix] [-l logpath]".
+    # no usable ip.txt and no -n, but we have a terminal → guided 3-step setup
     tf err_no_ipfile "$IPS_FILE" >&2
     echo >&2
-    local ans toks=() first="" i=0 tok
-    read -rp "$(t setup_prompt) " ans
-    [[ -n "$ans" ]] || {
+    local a1 a2 a3
+    # ① count or host-file (blank cancels)
+    read -rp "$(t setup_p1) " a1
+    [[ -n "$a1" ]] || {
       t setup_cancel >&2
       echo >&2
       return 1
     }
-    read -ra toks <<<"$ans"
-    while ((i < ${#toks[@]})); do
-      tok="${toks[i]}"
-      case "$tok" in
-      -p)
-        prefix="${toks[i + 1]:-}"
-        i=$((i + 2))
-        ;;
-      -l)
-        [[ -n "${toks[i + 1]:-}" ]] && LOGROOT="${toks[i + 1]}"
-        i=$((i + 2))
-        ;;
-      -n)
-        [[ -z "$first" ]] && first="${toks[i + 1]:-}"
-        i=$((i + 2))
-        ;;
-      *)
-        [[ -z "$first" ]] && first="$tok"
-        i=$((i + 1))
-        ;;
-      esac
-    done
-    if [[ "$first" =~ ^[0-9]+$ ]]; then
-      count="$first"
-    elif [[ -n "$first" && -r "$first" ]]; then
-      IPS_FILE="$first"
+    if [[ "$a1" =~ ^[0-9]+$ ]]; then
+      count="$a1"
+      # ② label prefix (only meaningful in count mode; blank = none)
+      read -rp "$(t setup_p2) " a2
+      [[ -n "$a2" ]] && prefix="$a2"
+    elif [[ -r "$a1" ]]; then
+      IPS_FILE="$a1"
       read_ips || return 1
     else
-      tf setup_badfile "${first:-$ans}" >&2
+      tf setup_badfile "$a1" >&2
       echo >&2
       return 1
     fi
+    # ③ log path (blank = keep default)
+    read -rp "$(t setup_p3) " a3
+    [[ -n "$a3" ]] && LOGROOT="$a3"
   else
     read_ips || return 1 # non-interactive: surface the real error
   fi
