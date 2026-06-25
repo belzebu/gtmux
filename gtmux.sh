@@ -176,6 +176,18 @@ has_session() { tmux has-session -t "$SESSION" 2>/dev/null; }
 log_dir() { tmux show-option -t "$SESSION" -qv @gtmux_logdir 2>/dev/null; }
 set_log_dir() { tmux set-option -t "$SESSION" @gtmux_logdir "$1"; }
 
+# Sidebar width in cells for a window of width $1 (handles % or fixed, clamped
+# so it never vanishes and always leaves room for the host pane). Absolute cells
+# work on every tmux version, unlike split-window -l <pct>% (needs ≥3.1).
+_sidebar_cols() {
+  local w="$1" c
+  if [[ "$SIDEBAR_W" == *% ]]; then c=$((w * ${SIDEBAR_W%\%} / 100)); else c="$SIDEBAR_W"; fi
+  ((c < 8)) && c=8
+  ((c > w - 12)) && c=$((w - 12))
+  ((c < 1)) && c=1
+  echo "$c"
+}
+
 # Expand a selection (1-4 / 1,3,5 / 1-3,7 / all) to 1-based positions in 1..max.
 expand_selection() {
   local sel="${1// /}" max="$2" part a b x
@@ -228,7 +240,7 @@ build_window() {
   fi
   dev="$(tmux list-panes -t "$win" -F '#{pane_id}' | head -1)"
   # left sidebar pane; pass idx(highlight) base(number) ipfile session(monitor list)
-  side="$(tmux split-window -h -b -l "$SIDEBAR_W" -t "$dev" -P -F '#{pane_id}' \
+  side="$(tmux split-window -h -b -l "${_SBW:-$SIDEBAR_W}" -t "$dev" -P -F '#{pane_id}' \
     "exec '$SELF' _sidebar '$idx' '$base' '$IPS_FILE' '$SESSION'")"
   tmux set -p -t "$side" @gtmux side
   tmux set -p -t "$dev" @gtmux dev
@@ -323,9 +335,21 @@ action_open() {
   printf '%s\n' "${IPS[@]}" >"$d/.devices"
   IPS_FILE="$d/.devices"
 
-  tmux new-session -d -s "$SESSION" -x 280 -y 60
+  # Build the session at the REAL terminal size so the sidebar isn't squeezed
+  # when attaching to a narrow window (don't build wide then shrink).
+  local cols lines
+  cols="$(tput cols 2>/dev/null)"
+  [[ "$cols" =~ ^[0-9]+$ ]] && ((cols >= 40)) || cols=200
+  lines="$(tput lines 2>/dev/null)"
+  [[ "$lines" =~ ^[0-9]+$ ]] && ((lines >= 10)) || lines=50
+  local _SBW
+  _SBW="$(_sidebar_cols "$cols")"
+
+  tmux new-session -d -s "$SESSION" -x "$cols" -y "$lines"
   set_log_dir "$d"
   tmux set-environment -t "$SESSION" GTMUX_LANG "$GTMUX_LANG" # children inherit language
+  # keep the sidebar proportional when the terminal is resized later
+  tmux set-hook -t "$SESSION" client-resized "run-shell -b '$SELF _relayout'" 2>/dev/null || true
   # 1-based windows so Prefix+1 = first host
   tmux set -t "$SESSION" base-index 1 2>/dev/null || true
   tmux set -t "$SESSION" pane-base-index 1 2>/dev/null || true
@@ -362,13 +386,20 @@ action_sidebar() {
     printf ' \033[1mgtmux\033[0m\n'
     printf ' \033[2m%s %s\033[0m\n' "${#IPS[@]}" "${T[hosts]}"
     printf ' ────────────────\n'
-    local i num
+    # width of this sidebar pane → truncate labels so each host is one line
+    local sw avail i num lbl
+    sw="$(tmux display -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)"
+    [[ "$sw" =~ ^[0-9]+$ ]] || sw=20
+    avail=$((sw - 9)) # widest line is the reverse-video current row
+    ((avail < 0)) && avail=0
     for i in "${!IPS[@]}"; do
       num=$((base + i)) # = tmux window number = the Prefix+N to press
+      lbl="${IPS[$i]}"
+      ((${#lbl} > avail)) && lbl="${lbl:0:avail}"
       if ((i == cur)); then
-        printf ' \033[7m %02d ▸ %s \033[0m\n' "$num" "${IPS[$i]}"
+        printf ' \033[7m %02d ▸ %s \033[0m\n' "$num" "$lbl"
       else
-        printf ' \033[36m%02d\033[0m   \033[2m%s\033[0m\n' "$num" "${IPS[$i]}"
+        printf ' \033[36m%02d\033[0m   \033[2m%s\033[0m\n' "$num" "$lbl"
       fi
     done
     # monitors (dynamic): windows named mon-*, jump with Prefix+their number
@@ -383,15 +414,19 @@ action_sidebar() {
         printf ' \033[33m%02d\033[0m \033[2m%s\033[0m\n' "$widx" "${wname#mon-}"
       done <<<"$mons"
     fi
-    printf ' ────────────────\n'
-    printf ' \033[2m%s\033[0m\n' "${T[h_jump]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_jumpn]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_updown]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_collapse]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_mon]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_bcast]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_enter]}"
-    printf ' \033[2m%s\033[0m\n' "${T[h_menu]}"
+    # Only show the key hints if the sidebar is wide enough; on a narrow pane
+    # they would wrap one char per line, so drop them and keep the host list.
+    if ((sw >= 15)); then
+      printf ' ────────────────\n'
+      printf ' \033[2m%s\033[0m\n' "${T[h_jump]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_jumpn]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_updown]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_collapse]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_mon]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_bcast]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_enter]}"
+      printf ' \033[2m%s\033[0m\n' "${T[h_menu]}"
+    fi
   }
   # redraw every 2s but only repaint when content changed (no flicker)
   local _last=""
@@ -615,6 +650,19 @@ action_logpath() {
 
 # ---- key bindings -----------------------------------------------------------
 
+# Re-fit every window's sidebar to the current terminal width (resize hook).
+action_relayout() {
+  local win ww side cols
+  while read -r win ww; do
+    [[ "$ww" =~ ^[0-9]+$ ]] || continue
+    side="$(tmux list-panes -t "$win" -F '#{pane_id}|#{@gtmux}' 2>/dev/null |
+      awk -F'|' '$2=="side"{print $1}')"
+    [[ -n "$side" ]] || continue
+    cols="$(_sidebar_cols "$ww")"
+    tmux resize-pane -t "$side" -x "$cols" 2>/dev/null || true
+  done < <(tmux list-windows -t "$SESSION" -F '#{window_id} #{window_width}')
+}
+
 # Live language switch from the menu. Stores the choice on the session so the
 # sidebar/monitor loops pick it up, rebinds the menu, refreshes the status line.
 action_setlang() {
@@ -704,6 +752,7 @@ _toggle_side)
   action_toggle_side "$@"
   ;;
 _toggle_side_all) action_toggle_side_all ;;
+_relayout) action_relayout ;;
 _monitor)
   shift
   action_monitor "$@"
