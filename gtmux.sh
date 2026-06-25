@@ -67,8 +67,8 @@ load_lang() {
     [m_detach]="離開(保留 session,可 attach 回來)" [m_kill]="關閉並刪除 session"
     [p_bcast_send]="廣播+送出:" [p_bcast_nosend]="廣播不送出:"
     [p_monitor]="監視:" [p_logpath]="log 路徑:" [p_bcastkey]="按鍵(如 C-c):"
-    [m_ctrlc]="送 Ctrl-C 給全部" [m_bcastkey]="廣播按鍵(C-c/Esc/F5…)"
-    [key_sent]="已對 %d 台送按鍵:%s"
+    [m_ctrlc]="送 Ctrl-C 給全部" [m_bcastkey]="廣播按鍵(自訂…)"
+    [m_keys]="快速按鍵 →" [key_sent]="已對 %d 台送按鍵:%s"
     [bcast_sent]="已廣播並送出 → %d 台"
     [bcast_typed]="已打入(未送出)→ %d 台;Prefix Enter 一起送出"
     [enter_sent]="已對 %d 台送出 Enter" [ssh_sent]="已對 %d 台送出 ssh"
@@ -110,8 +110,8 @@ else
     [m_detach]="detach (keep session, attach later)" [m_kill]="kill session"
     [p_bcast_send]="broadcast+send:" [p_bcast_nosend]="broadcast, no send:"
     [p_monitor]="monitor:" [p_logpath]="log path:" [p_bcastkey]="key (e.g. C-c):"
-    [m_ctrlc]="send Ctrl-C to all" [m_bcastkey]="broadcast a key (C-c/Esc/F5…)"
-    [key_sent]="sent key to %d hosts: %s"
+    [m_ctrlc]="send Ctrl-C to all" [m_bcastkey]="broadcast a key (custom…)"
+    [m_keys]="quick keys →" [key_sent]="sent key to %d hosts: %s"
     [bcast_sent]="broadcast + sent → %d hosts"
     [bcast_typed]="typed (not sent) → %d hosts; Prefix Enter to run"
     [enter_sent]="sent Enter to %d hosts" [ssh_sent]="sent ssh to %d hosts"
@@ -482,13 +482,45 @@ action_enterall() {
   tmux display-message "$(tf enter_sent "$DEV_N")"
 }
 
+# Normalize a key name to tmux's case (so users can type c-c, escape, f5, up…).
+# Modifier prefix C-/M-/S- is uppercased; the char/key after keeps its meaning.
+_norm_key() {
+  local k="$1" mod="" lk
+  if [[ "$k" =~ ^([cCmMsS])-(.+)$ ]]; then
+    mod="${BASH_REMATCH[1]^^}-"
+    k="${BASH_REMATCH[2]}"
+  fi
+  lk="${k,,}"
+  case "$lk" in
+  esc | escape) k=Escape ;;
+  enter | return | cr) k=Enter ;;
+  space | spc) k=Space ;;
+  bspace | backspace | bs) k=BSpace ;;
+  tab) k=Tab ;;
+  up) k=Up ;;
+  down) k=Down ;;
+  left) k=Left ;;
+  right) k=Right ;;
+  home) k=Home ;;
+  end) k=End ;;
+  pageup | pgup | ppage) k=PageUp ;;
+  pagedown | pgdn | pgdown | npage) k=PageDown ;;
+  delete | del) k=Delete ;;
+  insert | ins) k=Insert ;;
+  f[1-9] | f1[0-2]) k="F${lk#f}" ;;
+  *) : ;; # single chars / unknown left as typed (case is significant there)
+  esac
+  echo "${mod}${k}"
+}
+
 # Broadcast a key (not literal text) to all hosts, e.g. C-c, C-d, Escape, Up, F5.
-# Space-separated keys are sent in order (tmux send-keys key syntax).
+# Space-separated keys are sent in order; case-insensitive (normalized above).
 _BK_KEYS=()
 _cb_bkey() { tmux send-keys -t "$1" "${_BK_KEYS[@]}"; }
 action_bcastkey() {
-  # shellcheck disable=SC2206  # intentional word-split: each token is a key name
-  _BK_KEYS=($*)
+  local raw
+  _BK_KEYS=()
+  for raw in $*; do _BK_KEYS+=("$(_norm_key "$raw")"); done
   ((${#_BK_KEYS[@]})) || return 0
   foreach_dev _cb_bkey
   tmux display-message "$(tf key_sent "$DEV_N" "${_BK_KEYS[*]}")"
@@ -699,7 +731,27 @@ action_setlang() {
   tmux display-message "$(tf lang_set "$new")"
 }
 
+# Common keys for the quick palette ("label|tmux-key").
+_KEYPAL=(
+  "Ctrl-C|C-c" "Ctrl-D|C-d" "Ctrl-Z|C-z" "Escape|Escape" "Enter|Enter"
+  "Tab|Tab" "Space|Space" "BSpace|BSpace"
+  "Up|Up" "Down|Down" "Left|Left" "Right|Right"
+  "q|q" "y|y" "n|n" "F2|F2" "F5|F5" "F10|F10"
+)
+
 bind_keys() {
+  # quick key palette: build a display-menu of common keys, reused by Prefix k
+  # and the main-menu submenu item.
+  local _kp_args=() _kp_cmd e label key
+  _kp_cmd="display-menu -T \"$(t m_keys)\""
+  for e in "${_KEYPAL[@]}"; do
+    label="${e%%|*}"
+    key="${e#*|}"
+    _kp_args+=("$label" "" "run-shell -b '$SELF _bcastkey $key'")
+    _kp_cmd+=" '$label' '' 'run-shell -b \"$SELF _bcastkey $key\"'"
+  done
+  tmux bind-key -T prefix k display-menu -T "$(t m_keys)" "${_kp_args[@]}"
+
   tmux bind-key -T prefix Up previous-window
   tmux bind-key -T prefix Down next-window
   # broadcast ({}=host {n}=num): b send, B type-only, Enter send-all
@@ -723,6 +775,7 @@ bind_keys() {
     "$(t m_bcast_nosend)" B "command-prompt -p '$(t p_bcast_nosend)' \"run-shell -b '$SELF _bcast 0 \\\"%%\\\"'\"" \
     "$(t m_enterall)" r "run-shell -b '$SELF _enterall'" \
     "$(t m_ctrlc)" i "run-shell -b '$SELF _bcastkey C-c'" \
+    "$(t m_keys)" k "$_kp_cmd" \
     "$(t m_bcastkey)" K "command-prompt -p '$(t p_bcastkey)' \"run-shell -b '$SELF _bcastkey \\\"%%\\\"'\"" \
     "$(t m_ssh)" c "run-shell -b '$SELF _ssh_all'" \
     "$(t m_collapse_one)" e "run-shell '$SELF _toggle_side \"#{window_id}\"'" \
