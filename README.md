@@ -70,6 +70,7 @@ menu (`c` = ssh all) or type into a host yourself.
 | `Prefix b` | broadcast a command to **all** hosts (+ Enter) |
 | `Prefix B` | broadcast **without** Enter (review, then…) |
 | `Prefix Enter` | send Enter to all (run the pending broadcast) |
+| `Prefix C-c` | send Ctrl-C to all hosts |
 | `Prefix m` / `Prefix M` | open monitor (pick hosts) / close monitor |
 | `Prefix e` / `Prefix E` | collapse sidebar (this host / all) |
 | `Prefix d` | detach (session keeps running; `gtmux attach` to return) |
@@ -87,6 +88,10 @@ In any broadcast, these are substituted **per host** before sending:
 ./download {} 100          → ./download 10.0.0.4 100   (per host)
 ./download 10.0.0.{n} 100  → ./download 10.0.0.3 100   (per host)
 ```
+
+To broadcast a **key** instead of text (Ctrl-C, Escape, arrows, F-keys) use the
+menu *broadcast a key* or `Prefix C-c`. Uses tmux key names: `C-c`, `C-d`,
+`Escape`, `Up`, `F5`, … Monitor panes are never targeted by any broadcast.
 
 ### Monitor
 

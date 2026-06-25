@@ -66,7 +66,9 @@ load_lang() {
     [m_lang]="切換語言(中/英)" [lang_set]="語言:%s"
     [m_detach]="離開(保留 session,可 attach 回來)" [m_kill]="關閉並刪除 session"
     [p_bcast_send]="廣播+送出:" [p_bcast_nosend]="廣播不送出:"
-    [p_monitor]="監視:" [p_logpath]="log 路徑:"
+    [p_monitor]="監視:" [p_logpath]="log 路徑:" [p_bcastkey]="按鍵(如 C-c):"
+    [m_ctrlc]="送 Ctrl-C 給全部" [m_bcastkey]="廣播按鍵(C-c/Esc/F5…)"
+    [key_sent]="已對 %d 台送按鍵:%s"
     [bcast_sent]="已廣播並送出 → %d 台"
     [bcast_typed]="已打入(未送出)→ %d 台;Prefix Enter 一起送出"
     [enter_sent]="已對 %d 台送出 Enter" [ssh_sent]="已對 %d 台送出 ssh"
@@ -107,7 +109,9 @@ else
     [m_lang]="Language (zh / en)" [lang_set]="language: %s"
     [m_detach]="detach (keep session, attach later)" [m_kill]="kill session"
     [p_bcast_send]="broadcast+send:" [p_bcast_nosend]="broadcast, no send:"
-    [p_monitor]="monitor:" [p_logpath]="log path:"
+    [p_monitor]="monitor:" [p_logpath]="log path:" [p_bcastkey]="key (e.g. C-c):"
+    [m_ctrlc]="send Ctrl-C to all" [m_bcastkey]="broadcast a key (C-c/Esc/F5…)"
+    [key_sent]="sent key to %d hosts: %s"
     [bcast_sent]="broadcast + sent → %d hosts"
     [bcast_typed]="typed (not sent) → %d hosts; Prefix Enter to run"
     [enter_sent]="sent Enter to %d hosts" [ssh_sent]="sent ssh to %d hosts"
@@ -478,6 +482,18 @@ action_enterall() {
   tmux display-message "$(tf enter_sent "$DEV_N")"
 }
 
+# Broadcast a key (not literal text) to all hosts, e.g. C-c, C-d, Escape, Up, F5.
+# Space-separated keys are sent in order (tmux send-keys key syntax).
+_BK_KEYS=()
+_cb_bkey() { tmux send-keys -t "$1" "${_BK_KEYS[@]}"; }
+action_bcastkey() {
+  # shellcheck disable=SC2206  # intentional word-split: each token is a key name
+  _BK_KEYS=($*)
+  ((${#_BK_KEYS[@]})) || return 0
+  foreach_dev _cb_bkey
+  tmux display-message "$(tf key_sent "$DEV_N" "${_BK_KEYS[*]}")"
+}
+
 _cb_ssh() { tmux send-keys -t "$1" "ssh $SSH_OPTS $2" Enter; }
 action_ssh_all() {
   foreach_dev _cb_ssh
@@ -692,6 +708,8 @@ bind_keys() {
   tmux bind-key -T prefix B command-prompt -p "$(t p_bcast_nosend)" \
     "run-shell -b '$SELF _bcast 0 \"%%\"'"
   tmux bind-key -T prefix Enter run-shell -b "$SELF _enterall"
+  # quick: Prefix C-c sends Ctrl-C to all hosts
+  tmux bind-key -T prefix C-c run-shell -b "$SELF _bcastkey C-c"
   # collapse sidebar: e this window, E all
   tmux bind-key -T prefix e run-shell "$SELF _toggle_side '#{window_id}'"
   tmux bind-key -T prefix E run-shell -b "$SELF _toggle_side_all"
@@ -704,6 +722,8 @@ bind_keys() {
     "$(t m_bcast_send)" b "command-prompt -p '$(t p_bcast_send)' \"run-shell -b '$SELF _bcast 1 \\\"%%\\\"'\"" \
     "$(t m_bcast_nosend)" B "command-prompt -p '$(t p_bcast_nosend)' \"run-shell -b '$SELF _bcast 0 \\\"%%\\\"'\"" \
     "$(t m_enterall)" r "run-shell -b '$SELF _enterall'" \
+    "$(t m_ctrlc)" i "run-shell -b '$SELF _bcastkey C-c'" \
+    "$(t m_bcastkey)" K "command-prompt -p '$(t p_bcastkey)' \"run-shell -b '$SELF _bcastkey \\\"%%\\\"'\"" \
     "$(t m_ssh)" c "run-shell -b '$SELF _ssh_all'" \
     "$(t m_collapse_one)" e "run-shell '$SELF _toggle_side \"#{window_id}\"'" \
     "$(t m_collapse_all)" E "run-shell -b '$SELF _toggle_side_all'" \
@@ -743,6 +763,10 @@ _bcast)
   action_bcast "$@"
   ;;
 _enterall) action_enterall ;;
+_bcastkey)
+  shift
+  action_bcastkey "$@"
+  ;;
 _ssh_all) action_ssh_all ;;
 _log_start) action_log_start ;;
 _log_stop) action_log_stop ;;
