@@ -799,7 +799,7 @@ bind_keys() {
     "$(t m_monitor_close)" M "run-shell '$SELF _monitor_close \"#{window_id}\" \"#{window_name}\"'" \
     "" \
     "$(t m_log_start)" l "run-shell -b '$SELF _log_start'" \
-    "$(t m_log_stop)" k "run-shell -b '$SELF _log_stop'" \
+    "$(t m_log_stop)" s "run-shell -b '$SELF _log_stop'" \
     "$(t m_logpath)" L "command-prompt -p '$(t p_logpath)' \"run-shell -b '$SELF _logpath \\\"%%\\\"'\"" \
     "$(t m_clean)" C "run-shell -b '$SELF _clean'" \
     "$(t m_lang)" g "run-shell -b '$SELF _setlang toggle \"#{session_name}\"'" \
