@@ -106,6 +106,11 @@ to the host's own window or broadcast.
 | `LOGROOT` | `.` | log root (a timestamped subdir is created under it) |
 | `GTMUX_SIDEBAR_W` | `20%` | sidebar width (`%` or fixed cols) |
 | `GTMUX_MON_FRESH` | `3` | seconds within which a monitored log counts as `●live` |
+| `GTMUX_LANG` | `en` | UI language: `en`, `zh`, or `auto` (detect from `$LANG`) |
+
+The language is fixed when you `open` a session (stored in the session, so it
+survives detach/attach). A new session picks up `GTMUX_LANG` again — to make a
+non-default permanent, `export GTMUX_LANG=zh` in your shell rc.
 
 ## How it works
 
