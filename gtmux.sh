@@ -85,7 +85,7 @@ load_lang() {
     [err_no_ipfile]="找不到 %s" [err_empty_ipfile]="%s 沒有任何主機"
     [err_count]="-n 需要正整數: %s"
     [setup_p1]="① 數量或清單檔(空白取消):" [setup_p2]="② 標籤前綴(空白=無):"
-    [setup_p3]="③ log 路徑(空白=預設):"
+    [setup_p3]="③ log 路徑(給路徑=開 log,空白=不開):"
     [setup_cancel]="已取消" [setup_badfile]="不是數字也不是可讀檔: %s"
     [note_prefix]="註:-p 只在 -n 模式有效,ip.txt 模式忽略"
     [err_session_exists]="session '%s' 已存在 → '%s attach' 或 '%s kill'"
@@ -129,7 +129,7 @@ else
     [err_no_ipfile]="not found: %s" [err_empty_ipfile]="%s has no hosts"
     [err_count]="-n needs a positive integer: %s"
     [setup_p1]="① count or host-file (blank cancels):" [setup_p2]="② label prefix (blank = none):"
-    [setup_p3]="③ log path (blank = default):"
+    [setup_p3]="③ log path (a path starts logging; blank = none):"
     [setup_cancel]="cancelled" [setup_badfile]="not a number or a readable file: %s"
     [note_prefix]="note: -p only applies with -n; ignored for ip.txt"
     [err_session_exists]="session '%s' exists → '%s attach' or '%s kill'"
@@ -320,9 +320,12 @@ action_open() {
       echo >&2
       return 1
     fi
-    # ③ log path (blank = keep default)
+    # ③ log path — giving a path enables logging there; blank = no logging
     read -rp "$(t setup_p3) " a3
-    [[ -n "$a3" ]] && LOGROOT="$a3"
+    [[ -n "$a3" ]] && {
+      LOGROOT="$a3"
+      GTMUX_LOG=on
+    }
   else
     read_ips || return 1 # non-interactive: surface the real error
   fi
@@ -344,17 +347,22 @@ action_open() {
     echo >&2
     return 1
   fi
-  local ts d ip
+  local ts d ip wd
+  case "$LOGROOT" in /*) ;; *) LOGROOT="$PWD/$LOGROOT" ;; esac # absolute → cwd-independent
   ts="$(date +%Y%m%d_%H%M%S)"
-  d="$LOGROOT/$ts"
-  mkdir -p "$d" || {
-    tf err_mkdir_log "$d" >&2
+  d="$LOGROOT/$ts" # intended log dir — created lazily only when logging starts
+  # Freeze the host list into a temp work dir (not cwd) so logging-off leaves no
+  # directory behind. The sidebar/monitor read this one copy.
+  wd="${TMPDIR:-/tmp}/gtmux-${SESSION}-${ts}"
+  mkdir -p "$wd" || {
+    tf err_mkdir_log "$wd" >&2
     echo >&2
     return 1
   }
-  # freeze the host list into the log dir; the sidebar reads this one copy
-  printf '%s\n' "${IPS[@]}" >"$d/.devices"
-  IPS_FILE="$d/.devices"
+  printf '%s\n' "${IPS[@]}" >"$wd/.devices"
+  IPS_FILE="$wd/.devices"
+  # if logging is on at open, the log dir must exist for build_window's pipe
+  [[ "$GTMUX_LOG" == on ]] && mkdir -p "$d"
 
   # Build the session at the REAL terminal size so the sidebar isn't squeezed
   # when attaching to a narrow window (don't build wide then shrink).
@@ -368,6 +376,7 @@ action_open() {
 
   tmux new-session -d -s "$SESSION" -x "$cols" -y "$lines"
   set_log_dir "$d"
+  tmux set-option -t "$SESSION" @gtmux_devices "$wd/.devices" # host list (independent of log dir)
   tmux set-environment -t "$SESSION" GTMUX_LANG "$GTMUX_LANG" # children inherit language
   # keep the sidebar proportional when the terminal is resized later
   tmux set-hook -t "$SESSION" client-resized "run-shell -b '$SELF _relayout'" 2>/dev/null || true
@@ -560,12 +569,12 @@ _LOGD=""
 _cb_logon() { tmux pipe-pane -t "$1" "cat >> '$_LOGD/${2}.log'"; }
 _cb_logoff() { tmux pipe-pane -t "$1"; }
 action_log_start() {
-  _LOGD="$(log_dir)"
-  [[ -d "$_LOGD" ]] || {
-    _LOGD="$LOGROOT/manual_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$_LOGD"
+  _LOGD="$(log_dir)" # intended log dir, set at open — create it now (lazy)
+  [[ -n "$_LOGD" ]] || {
+    _LOGD="$LOGROOT/$(date +%Y%m%d_%H%M%S)"
     set_log_dir "$_LOGD"
   }
+  mkdir -p "$_LOGD"
   foreach_dev _cb_logon
   tmux display-message "$(tf log_started "$DEV_N" "$_LOGD")"
 }
@@ -626,21 +635,23 @@ action_montail() {
 # Pick several hosts, tile them in one 'mon-<sel>' window (tail -F each log).
 # Non-destructive — the real host windows are untouched. Multiple can coexist.
 action_monitor() {
-  local sel="$*" logd label p win i first
+  local sel="$*" logd devf label p win i first
   logd="$(log_dir)"
-  [[ -n "$logd" && -f "$logd/.devices" ]] || {
+  devf="$(tmux show-option -t "$SESSION" -qv @gtmux_devices 2>/dev/null)"
+  [[ -n "$logd" && -f "$devf" ]] || {
     tmux display-message "$(t mon_need_open)"
     return
   }
   local DEVS=()
-  mapfile -t DEVS <"$logd/.devices"
+  mapfile -t DEVS <"$devf"
   local max=${#DEVS[@]} pos=()
   mapfile -t pos < <(expand_selection "$sel" "$max")
   ((${#pos[@]})) || {
     tmux display-message "$(t mon_badsel)"
     return
   }
-  # monitoring tails the per-host logs → make sure logging is flowing
+  # monitoring tails per-host logs → create the log dir and turn logging on
+  mkdir -p "$logd"
   _LOGD="$logd"
   foreach_dev _cb_logon
   local mname="mon-${sel// /}"                      # name carries the selection
