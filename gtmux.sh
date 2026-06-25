@@ -461,14 +461,21 @@ action_sidebar() {
 
 # ---- actions over all host panes (foreach_dev callbacks) --------------------
 
-# Broadcast one command to all hosts. Placeholders substituted per host before
-# sending:  {} → that host's label   {n} → that host's number
+# Broadcast one command to all hosts. Placeholders substituted per host:
+#   {}    that host's full label (e.g. 192.168.1.101)
+#   {oct} last octet of the label, for IP labels (192.168.1.101 → 101)
+#   {n}   that host's list number (1, 2, 3, …)
+#   {nn}  the number zero-padded to 2 digits (01, 02, …)
 _BC_ENTER=1
 _BC_TMPL=""
 _cb_bcast() {
-  local cmd="$_BC_TMPL"
-  cmd="${cmd//\{\}/$2}"
+  local cmd="$_BC_TMPL" oct nn
+  oct="${2##*.}" # last octet of an IP label (no dot → whole label)
+  printf -v nn '%02d' "$3" 2>/dev/null || nn="$3"
+  cmd="${cmd//\{oct\}/$oct}"
+  cmd="${cmd//\{nn\}/$nn}"
   cmd="${cmd//\{n\}/$3}"
+  cmd="${cmd//\{\}/$2}"
   if [[ "$_BC_ENTER" == 1 ]]; then
     tmux send-keys -t "$1" "$cmd" Enter
   else
