@@ -108,9 +108,10 @@ to the host's own window or broadcast.
 | `GTMUX_MON_FRESH` | `3` | seconds within which a monitored log counts as `●live` |
 | `GTMUX_LANG` | `en` | UI language: `en`, `zh`, or `auto` (detect from `$LANG`) |
 
-The language is fixed when you `open` a session (stored in the session, so it
-survives detach/attach). A new session picks up `GTMUX_LANG` again — to make a
-non-default permanent, `export GTMUX_LANG=zh` in your shell rc.
+Set at `open` and stored on the session (survives detach/attach). Switch it
+**live** from the menu (`Prefix Space` → *Language*) — the menu relabels and the
+sidebar repaints within ~2s. To make a non-default permanent, `export
+GTMUX_LANG=zh` in your shell rc.
 
 ## How it works
 

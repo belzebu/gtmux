@@ -48,8 +48,9 @@ if [[ "$GTMUX_LANG" == auto ]]; then
 fi
 
 declare -A T
-if [[ "$GTMUX_LANG" == zh ]]; then
-  T=(
+load_lang() {
+  if [[ "$GTMUX_LANG" == zh ]]; then
+    T=(
     [hosts]="台" [monitors]="監視器" [no_ipfile_short]="(無ip.txt)"
     [h_jump]="Pfx 1-9 跳台" [h_jumpn]="Pfx ' 編號跳" [h_updown]="Pfx ↑↓ 換台"
     [h_collapse]="Pfx e/E 收左欄" [h_mon]="Pfx m 監視/M 關"
@@ -62,6 +63,7 @@ if [[ "$GTMUX_LANG" == zh ]]; then
     [m_log_start]="開始全機 log" [m_log_stop]="停止全機 log"
     [m_logpath]="改 log 路徑" [m_clean]="清 log 雜訊"
     [m_prev]="上一台" [m_next]="下一台"
+    [m_lang]="切換語言(中/英)" [lang_set]="語言:%s"
     [m_detach]="離開(保留 session,可 attach 回來)" [m_kill]="關閉並刪除 session"
     [p_bcast_send]="廣播+送出:" [p_bcast_nosend]="廣播不送出:"
     [p_monitor]="監視:" [p_logpath]="log 路徑:"
@@ -102,6 +104,7 @@ else
     [m_log_start]="start logging (all)" [m_log_stop]="stop logging (all)"
     [m_logpath]="change log path" [m_clean]="clean log ANSI"
     [m_prev]="previous host" [m_next]="next host"
+    [m_lang]="Language (zh / en)" [lang_set]="language: %s"
     [m_detach]="detach (keep session, attach later)" [m_kill]="kill session"
     [p_bcast_send]="broadcast+send:" [p_bcast_nosend]="broadcast, no send:"
     [p_monitor]="monitor:" [p_logpath]="log path:"
@@ -128,11 +131,30 @@ else
     [no_session]="no such session" [rebound]="keys rebound"
     [status_right]="Prefix+%s menu · Prefix ↑↓ switch · Prefix b broadcast"
   )
-fi
+  fi
+}
 # t  KEY        → plain string (direct, no fork in hot paths use ${T[KEY]})
 # tf KEY args.. → printf the template with args (for %d/%s messages)
 t() { printf '%s' "${T[$1]:-$1}"; }
 tf() { printf "${T[$1]:-$1}" "${@:2}"; }
+
+# A running session's chosen language (set by open / the live switch) wins over
+# the env, so subprocesses follow the session.
+_sl="$(tmux show-option -t "$SESSION" -qv @gtmux_lang 2>/dev/null)"
+[[ -n "$_sl" ]] && GTMUX_LANG="$_sl"
+unset _sl
+load_lang
+
+# Re-pick the session language; reload the table if it changed. Used by the
+# long-running sidebar / monitor loops so a live switch reaches them.
+sync_lang() {
+  local l
+  l="$(tmux show-option -t "$SESSION" -qv @gtmux_lang 2>/dev/null)"
+  [[ -n "$l" && "$l" != "$GTMUX_LANG" ]] || return 1
+  GTMUX_LANG="$l"
+  load_lang
+  return 0
+}
 
 # ---- helpers ----------------------------------------------------------------
 
@@ -333,6 +355,7 @@ action_sidebar() {
   local cur="$1" base="${2:-0}" ipf="${3:-}" sess="${4:-}"
   [[ -n "$ipf" ]] && IPS_FILE="$ipf"
   [[ -n "$sess" ]] && SESSION="$sess"
+  sync_lang || true # follow the session language now that SESSION is known
   read_ips 2>/dev/null || IPS=("${T[no_ipfile_short]}")
   render_sidebar() {
     printf '\033[H\033[2J'
@@ -374,6 +397,7 @@ action_sidebar() {
   local _last=""
   trap '_last=' WINCH
   while :; do
+    sync_lang && _last="" # language switched live → force a repaint
     local c
     c="$(render_sidebar)"
     if [[ "$c" != "$_last" ]]; then
@@ -473,6 +497,7 @@ action_montail() {
   tpid=$!
   trap 'kill "$tpid" 2>/dev/null' EXIT INT TERM
   while :; do
+    sync_lang || true # keep freshness labels in the session language
     if [[ -f "$file" ]]; then
       mtime="$(stat -c %Y "$file" 2>/dev/null || stat -f %m "$file" 2>/dev/null)"
       now="$(date +%s)"
@@ -590,6 +615,26 @@ action_logpath() {
 
 # ---- key bindings -----------------------------------------------------------
 
+# Live language switch from the menu. Stores the choice on the session so the
+# sidebar/monitor loops pick it up, rebinds the menu, refreshes the status line.
+action_setlang() {
+  local mode="${1:-toggle}" sess="${2:-}" cur new
+  [[ -n "$sess" ]] && SESSION="$sess"
+  cur="$(tmux show-option -t "$SESSION" -qv @gtmux_lang 2>/dev/null)"
+  [[ -n "$cur" ]] || cur="$GTMUX_LANG"
+  case "$mode" in
+  zh | en) new="$mode" ;;
+  *) [[ "$cur" == zh ]] && new=en || new=zh ;;
+  esac
+  GTMUX_LANG="$new"
+  load_lang
+  tmux set-option -t "$SESSION" @gtmux_lang "$new"
+  tmux set-environment -t "$SESSION" GTMUX_LANG "$new"
+  bind_keys
+  tmux set -t "$SESSION" status-right "$(tf status_right "$MENU_KEY")"
+  tmux display-message "$(tf lang_set "$new")"
+}
+
 bind_keys() {
   tmux bind-key -T prefix Up previous-window
   tmux bind-key -T prefix Down next-window
@@ -621,6 +666,7 @@ bind_keys() {
     "$(t m_log_stop)" k "run-shell -b '$SELF _log_stop'" \
     "$(t m_logpath)" L "command-prompt -p '$(t p_logpath)' \"run-shell -b '$SELF _logpath \\\"%%\\\"'\"" \
     "$(t m_clean)" C "run-shell -b '$SELF _clean'" \
+    "$(t m_lang)" g "run-shell -b '$SELF _setlang toggle \"#{session_name}\"'" \
     "" \
     "$(t m_prev)" p "previous-window" \
     "$(t m_next)" n "next-window" \
@@ -673,6 +719,10 @@ _monitor_close)
 _logpath)
   shift
   action_logpath "$@"
+  ;;
+_setlang)
+  shift
+  action_setlang "$@"
   ;;
 *)
   echo "usage: $0 [open [-n N] [-p PREFIX] [-l LOGPATH] | attach | kill | help]" >&2
