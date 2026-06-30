@@ -13,18 +13,26 @@
 #
 # `open` only lays out the panes (plain shells, no auto-ssh); connect via menu.
 #
+# Broadcast (Prefix b / menu) substitutes these per host before sending:
+#   {}    the host label            (e.g. 192.168.1.101)
+#   {n}   its list number           (1, 2, 3 …)
+#   {nn}  number zero-padded to 2   (01, 02 …)
+#   {oct} last octet of an IP label (192.168.1.101 → 101)
+#   e.g.  ./download 10.0.0.{n} 100      ssh root@10.0.0.{oct}
+#
 # Usage:
 #   gtmux open                # read ip.txt, lay out, enter
 #   gtmux open -f hosts.txt   # use a specific host-list file
 #   gtmux open -n 5           # N blank panes (no ip.txt), numbered 1..5
 #   gtmux open -n 5 -p dut-   # N panes labelled dut-1 .. dut-5
-#   gtmux open -l /tmp/logs   # log dir (default: ./)
+#   gtmux open -l /tmp/logs   # log dir AND start logging (default dir: ./)
 #   gtmux attach              # re-enter
 #   gtmux kill                # destroy the session
 #   gtmux help                # this help
 #
 # Env: GTMUX_SESSION=gtmux  GTMUX_KEY=Space  IPS_FILE=./ip.txt  LOGROOT=.
-#      GTMUX_SIDEBAR_W=20%   GTMUX_MON_FRESH=3   GTMUX_LANG=zh|en|auto   GTMUX_LOG=off|on
+#      GTMUX_SIDEBAR_W=20%   GTMUX_LANG=zh|en|auto   GTMUX_LOG=off|on
+#      GTMUX_LOG_FORMAT=plain|raw|both   (saved log: stripped / original / both)
 set -u
 
 SESSION="${GTMUX_SESSION:-gtmux}"
@@ -34,8 +42,8 @@ IPS_FILE="${IPS_FILE:-$DIR/ip.txt}"
 LOGROOT="${LOGROOT:-.}"
 MENU_KEY="${GTMUX_KEY:-Space}"
 SIDEBAR_W="${GTMUX_SIDEBAR_W:-20%}" # % scales with the screen; or fixed cols e.g. 30
-MON_FRESH="${GTMUX_MON_FRESH:-3}"   # monitor: log mtime within N s counts as ●live
 GTMUX_LOG="${GTMUX_LOG:-off}"       # auto-start per-host logging at open: off|on
+GTMUX_LOG_FORMAT="${GTMUX_LOG_FORMAT:-plain}" # saved log: plain | raw | both
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 # ---- i18n -------------------------------------------------------------------
@@ -58,17 +66,19 @@ load_lang() {
     [h_collapse]="Pfx e/E 收左欄" [h_mon]="Pfx m 監視/M 關"
     [h_bcast]="Pfx b 廣播/B 不送" [h_enter]="Pfx Enter 全送出" [h_menu]="Pfx Spc 選單"
     [mon_live]="●live" [mon_stop]="⏸停%ds" [mon_nolog]="(無log)"
-    [m_bcast_send]="廣播+送出({}台 {n}號)" [m_bcast_nosend]="廣播不送出(待確認)"
+    [m_bcast_send]="廣播+送出  ({} {n} {nn} {oct})" [m_bcast_nosend]="廣播不送出(待確認)"
     [m_enterall]="對全部送出 Enter(執行)" [m_ssh]="全部 ssh 連線"
     [m_collapse_one]="收合/展開左欄(此台)" [m_collapse_all]="收合/展開左欄(全部)"
     [m_monitor]="監視器:挑幾台一起看" [m_monitor_close]="關閉監視器(此/全部)"
     [m_log_start]="開始全機 log" [m_log_stop]="停止全機 log"
     [m_logpath]="改 log 路徑" [m_clean]="清 log 雜訊"
+    [m_logfmt]="log 格式切換(純文字/原始/兩者)" [logfmt_set]="log 格式:%s"
     [m_prev]="上一台" [m_next]="下一台"
     [m_lang]="i18n(中/英)" [lang_set]="語言:%s"
     [mode_on]="-- GTMUX 模式 --  1-9跳台 b廣播 r送Enter m監視 e收欄 l/s記錄 c連線 / Esc離開"
     [m_mode]="進入 GTMUX 模式(免 prefix 連打)"
     [mode_hint]="GTMUX 模式中(只收命令鍵)— 要打字請按 Esc 離開"
+    [sb_log]="●LOG" [sb_mode]="●MODE"
     [m_detach]="離開(保留 session,可 attach 回來)" [m_kill]="關閉並刪除 session"
     [p_bcast_send]="廣播+送出:" [p_bcast_nosend]="廣播不送出:"
     [p_monitor]="監視:" [p_logpath]="log 路徑:" [p_bcastkey]="按鍵(如 C-c):"
@@ -105,17 +115,19 @@ else
     [h_collapse]="Pfx e/E collapse" [h_mon]="Pfx m mon/M close"
     [h_bcast]="Pfx b cast/B hold" [h_enter]="Pfx Enter run all" [h_menu]="Pfx Spc menu"
     [mon_live]="●live" [mon_stop]="⏸%ds idle" [mon_nolog]="(no log)"
-    [m_bcast_send]="broadcast + send ({}=host {n}=num)" [m_bcast_nosend]="broadcast, no send (review)"
+    [m_bcast_send]="broadcast+send  ({} {n} {nn} {oct})" [m_bcast_nosend]="broadcast, no send (review)"
     [m_enterall]="send Enter to all (run)" [m_ssh]="ssh all hosts"
     [m_collapse_one]="collapse sidebar (this)" [m_collapse_all]="collapse sidebar (all)"
     [m_monitor]="monitor: watch several" [m_monitor_close]="close monitor (this/all)"
     [m_log_start]="start logging (all)" [m_log_stop]="stop logging (all)"
     [m_logpath]="change log path" [m_clean]="clean log ANSI"
+    [m_logfmt]="cycle log format (plain/raw/both)" [logfmt_set]="log format: %s"
     [m_prev]="previous host" [m_next]="next host"
     [m_lang]="i18n (zh / en)" [lang_set]="language: %s"
     [mode_on]="-- GTMUX MODE --  1-9 jump  b cast  r send-Enter  m monitor  e collapse  l/s log  c ssh / Esc exit"
     [m_mode]="enter GTMUX mode (no prefix per key)"
     [mode_hint]="GTMUX mode (command keys only) — press Esc to type"
+    [sb_log]="●LOG" [sb_mode]="●MODE"
     [m_detach]="detach (keep session, attach later)" [m_kill]="kill session"
     [p_bcast_send]="broadcast+send:" [p_bcast_nosend]="broadcast, no send:"
     [p_monitor]="monitor:" [p_logpath]="log path:" [p_bcastkey]="key (e.g. C-c):"
@@ -190,6 +202,27 @@ has_session() { tmux has-session -t "$SESSION" 2>/dev/null; }
 log_dir() { tmux show-option -t "$SESSION" -qv @gtmux_logdir 2>/dev/null; }
 set_log_dir() { tmux set-option -t "$SESSION" @gtmux_logdir "$1"; }
 
+# status-LEFT: the name, then (in GTMUX mode) a reverse MODE badge, then (while
+# logging) a reverse ● LOG + the log dir. Put state on the left so it's drawn
+# from column 0 and never truncated away the way a long right-aligned string is.
+_status_left() {
+  # Two rules here, both learned the hard way:
+  #  1) NO comma inside any #[...] within a #{?...} — a comma is read as the
+  #     conditional's separator (so write #[bg=red]#[fg=white], not #[bg=red,...]).
+  #  2) Use explicit #[bg=…]#[fg=…] for badges, NOT #[reverse] — on some
+  #     terminals (WSL / Windows Terminal) #[default] doesn't clear reverse, so
+  #     the next colour bleeds into a solid bar that eats the path.
+  printf '%s%s%s' \
+    "#[bold] gtmux #[default]" \
+    "#{?#{==:#{@gtmux_mode},1},#[bg=cyan]#[fg=black] ${T[sb_mode]} #[default] ,}" \
+    "#{?#{==:#{@gtmux_logging},1},#[bg=red]#[fg=white] ● LOG #[default]#[bg=yellow]#[fg=black] #{@gtmux_logformat} #[default] #[fg=green]#{@gtmux_logdir}#[default] ,}"
+}
+
+# status-right: just the hint (LOG and MODE state live in status-left).
+_status_right() {
+  printf '%s' "$(tf status_right "$MENU_KEY")"
+}
+
 # Sidebar width in cells for a window of width $1 (handles % or fixed, clamped
 # so it never vanishes and always leaves room for the host pane). Absolute cells
 # work on every tmux version, unlike split-window -l <pct>% (needs ≥3.1).
@@ -258,9 +291,16 @@ build_window() {
     "exec '$SELF' _sidebar '$idx' '$base' '$IPS_FILE' '$SESSION'")"
   tmux set -p -t "$side" @gtmux side
   tmux set -p -t "$dev" @gtmux dev
+  # These are WINDOW options → set them per window, or windows after the first
+  # inherit the user's global. Hide the pane-border title line, and blank the
+  # status-bar window list (the "1:1 2:2 …" is redundant with the sidebar and
+  # would overflow the bar with many hosts).
+  tmux set -w -t "$win" pane-border-status off 2>/dev/null || true
+  tmux set -w -t "$win" window-status-format "" 2>/dev/null || true
+  tmux set -w -t "$win" window-status-current-format "" 2>/dev/null || true
   tmux select-pane -t "$dev" -T "$ip"
   # logging is off by default (GTMUX_LOG=on to auto-start, or menu 'l' later)
-  [[ "$GTMUX_LOG" == on ]] && tmux pipe-pane -t "$dev" "cat >> '$d/${ip}.log'"
+  [[ "$GTMUX_LOG" == on ]] && tmux pipe-pane -t "$dev" "'$SELF' _logfilter '$d/${ip}.log' '$GTMUX_LOG_FORMAT'"
   tmux select-pane -t "$dev" # focus the host shell, not sidebar
 }
 
@@ -279,6 +319,7 @@ action_open() {
       ;;
     -l)
       logbase="${2:-}"
+      GTMUX_LOG=on # giving a log path means: start logging at open
       shift 2
       ;;
     -f)
@@ -355,6 +396,10 @@ action_open() {
   fi
   local ts d ip wd
   case "$LOGROOT" in /*) ;; *) LOGROOT="$PWD/$LOGROOT" ;; esac # absolute → cwd-independent
+  LOGROOT="${LOGROOT//\/.\//\/}"                      # tidy 'a/./b' → 'a/b' (e.g. -l ./)
+  while [[ "$LOGROOT" == *//* ]]; do LOGROOT="${LOGROOT//\/\//\/}"; done # 'a//b' → 'a/b'
+  LOGROOT="${LOGROOT%/}"
+  [[ -n "$LOGROOT" ]] || LOGROOT=/
   ts="$(date +%Y%m%d_%H%M%S)"
   d="$LOGROOT/$ts" # intended log dir — created lazily only when logging starts
   # Freeze the host list into a temp work dir (not cwd) so logging-off leaves no
@@ -370,35 +415,53 @@ action_open() {
   # if logging is on at open, the log dir must exist for build_window's pipe
   [[ "$GTMUX_LOG" == on ]] && mkdir -p "$d"
 
-  # Build the session at the REAL terminal size so the sidebar isn't squeezed
-  # when attaching to a narrow window (don't build wide then shrink).
-  local cols lines
-  cols="$(tput cols 2>/dev/null)"
-  [[ "$cols" =~ ^[0-9]+$ ]] && ((cols >= 40)) || cols=200
-  lines="$(tput lines 2>/dev/null)"
+  # Build the session at the width it will actually be VIEWED at, so the window
+  # never has to resize when shown — a resize drifts the sidebar pane wide (tmux
+  # doesn't keep its ratio). The catch: when we run inside another tmux, this
+  # session is reached via switch-client and shown at the OUTER CLIENT's full
+  # width — but `tput`/`$COLUMNS` here report this (possibly split) pane's width,
+  # which is smaller. So inside tmux, take the client width from tmux itself.
+  local cols="" lines=""
+  if [[ -n "${TMUX:-}" ]]; then
+    cols="$(tmux display -p '#{client_width}' 2>/dev/null)"
+    lines="$(tmux display -p '#{client_height}' 2>/dev/null)"
+  fi
+  [[ "$cols" =~ ^[0-9]+$ ]] && ((cols >= 40)) || cols="$(tput cols 2>/dev/null)"
+  [[ "$cols" =~ ^[0-9]+$ ]] && ((cols >= 40)) || cols="${COLUMNS:-}"
+  [[ "$cols" =~ ^[0-9]+$ ]] && ((cols >= 40)) || cols="$(stty size </dev/tty 2>/dev/null | awk '{print $2}')"
+  [[ "$cols" =~ ^[0-9]+$ ]] && ((cols >= 40)) || cols=120
+  [[ "$lines" =~ ^[0-9]+$ ]] && ((lines >= 10)) || lines="$(tput lines 2>/dev/null)"
+  [[ "$lines" =~ ^[0-9]+$ ]] && ((lines >= 10)) || lines="$(stty size </dev/tty 2>/dev/null | awk '{print $1}')"
   [[ "$lines" =~ ^[0-9]+$ ]] && ((lines >= 10)) || lines=50
   local _SBW
   _SBW="$(_sidebar_cols "$cols")"
 
   tmux new-session -d -s "$SESSION" -x "$cols" -y "$lines"
   set_log_dir "$d"
+  tmux set-option -t "$SESSION" @gtmux_logging "$([[ "$GTMUX_LOG" == on ]] && echo 1 || echo 0)"
+  tmux set-option -t "$SESSION" @gtmux_logformat "$GTMUX_LOG_FORMAT" # plain|raw|both
+  tmux set-option -t "$SESSION" @gtmux_mode 0
   tmux set-option -t "$SESSION" @gtmux_devices "$wd/.devices" # host list (independent of log dir)
   tmux set-environment -t "$SESSION" GTMUX_LANG "$GTMUX_LANG" # children inherit language
-  # Make every window track the attached client's size (so they don't keep stale
-  # build-time widths that would mis-size the 20% sidebar).
-  tmux set-option -t "$SESSION" window-size latest 2>/dev/null || true
-  tmux set-option -t "$SESSION" aggressive-resize on 2>/dev/null || true
-  # Re-fit the sidebar on resize AND on attach / switching window (a window may
-  # only reach the real client size once it's shown).
+  # Normalize all windows to the client size whenever we enter the session
+  # (attach OR switch-client from an outer tmux) and on real resize. _relayout
+  # pins every window to the client size and sets window-size manual, so nothing
+  # auto-resizes afterwards (which would drift the sidebar). Don't use
+  # window-size latest/aggressive-resize — they resize windows independently and
+  # at different times, which is exactly what causes the drift.
   tmux set-hook -t "$SESSION" client-resized "run-shell -b '$SELF _relayout'" 2>/dev/null || true
   tmux set-hook -t "$SESSION" client-attached "run-shell -b '$SELF _relayout'" 2>/dev/null || true
-  tmux set-hook -t "$SESSION" session-window-changed "run-shell -b '$SELF _relayout'" 2>/dev/null || true
+  tmux set-hook -t "$SESSION" client-session-changed "run-shell -b '$SELF _relayout'" 2>/dev/null || true
+  # On window switch: repaint the sidebar and (inside _sidebar_poke) redraw the
+  # status line — some terminals (WSL/Windows Terminal) don't repaint the status
+  # bar on switch, so the ● LOG path can vanish until the next status-interval.
+  tmux set-hook -t "$SESSION" session-window-changed "run-shell -b '$SELF _sidebar_poke'" 2>/dev/null || true
   # 1-based windows so Prefix+1 = first host
   tmux set -t "$SESSION" base-index 1 2>/dev/null || true
   tmux set -t "$SESSION" pane-base-index 1 2>/dev/null || true
   tmux move-window -r -t "$SESSION" 2>/dev/null || true
   tmux set -t "$SESSION" mouse on 2>/dev/null || true
-  tmux set -t "$SESSION" pane-border-status off 2>/dev/null || true
+  # (pane-border-status is per-window — build_window sets it off on each window)
 
   local i base
   base="$(tmux list-windows -t "$SESSION" -F '#{window_index}' | head -1)"
@@ -406,14 +469,25 @@ action_open() {
 
   bind_keys
   tmux select-window -t "${SESSION}:${base}"
-  tmux set -t "$SESSION" status-left "#[bold] gtmux #[default]"
-  tmux set -t "$SESSION" status-right "#{?#{==:#{client_key_table},gtmux},#[reverse] GTMUX #[noreverse] ,}$(tf status_right "$MENU_KEY")"
+  # Own the status bar's base colours so a user's tmux theme (e.g. a green
+  # status-bg) can't clash — without this the green log path was drawn on a
+  # green status background and vanished on WSL. Neutral bg = terminal default.
+  tmux set -t "$SESSION" status-style "bg=default fg=default" 2>/dev/null || true
+  tmux set -t "$SESSION" status-left-length 200 2>/dev/null || true # room for the log path
+  tmux set -t "$SESSION" status-left "$(_status_left)"
+  tmux set -t "$SESSION" status-right "$(_status_right)"
 
   tf opened "${#IPS[@]}" "$d"
   echo
   tf opened_hint "$MENU_KEY"
   echo
-  [[ -z "${TMUX:-}" ]] && tmux attach -t "$SESSION"
+  # Jump straight in. Inside tmux use switch-client (same client we sized for, so
+  # build width == view width → no resize, no sidebar drift); else attach.
+  if [[ -z "${TMUX:-}" ]]; then
+    tmux attach -t "$SESSION"
+  else
+    tmux switch-client -t "$SESSION"
+  fi
 }
 
 # ---- sidebar (runs as the left pane's own process) --------------------------
@@ -428,6 +502,7 @@ action_sidebar() {
     printf '\033[H\033[2J'
     printf ' \033[1mgtmux\033[0m\n'
     printf ' \033[2m%s %s\033[0m\n' "${#IPS[@]}" "${T[hosts]}"
+    # (LOG and MODE state live in the bottom status bar, not in the sidebar.)
     printf ' ────────────────\n'
     # width of this sidebar pane → truncate labels so each host is one line
     local sw avail i num lbl
@@ -435,7 +510,24 @@ action_sidebar() {
     [[ "$sw" =~ ^[0-9]+$ ]] || sw=20
     avail=$((sw - 9)) # widest line is the reverse-video current row
     ((avail < 0)) && avail=0
-    for i in "${!IPS[@]}"; do
+    # Viewport: if there are more hosts than fit the pane, show a window around
+    # the CURRENT host so its ▸ is always visible, with ↑/↓ counts for the rest.
+    local ph total rows start end
+    ph="$(tmux display -p -t "${TMUX_PANE:-}" '#{pane_height}' 2>/dev/null)"
+    [[ "$ph" =~ ^[0-9]+$ ]] || ph=40
+    total=${#IPS[@]}
+    rows=$((ph - 16)) # leave room for header + footer + the ↑/↓ markers
+    ((rows < 3)) && rows=3
+    start=0
+    end=$total
+    if ((total > rows)); then
+      start=$((cur - rows / 2))
+      ((start < 0)) && start=0
+      ((start > total - rows)) && start=$((total - rows))
+      end=$((start + rows))
+    fi
+    ((start > 0)) && printf ' \033[2m   ↑ %d\033[0m\n' "$start"
+    for ((i = start; i < end; i++)); do
       num=$((base + i)) # = tmux window number = the Prefix+N to press
       lbl="${IPS[$i]}"
       ((${#lbl} > avail)) && lbl="${lbl:0:avail}"
@@ -445,6 +537,7 @@ action_sidebar() {
         printf ' \033[36m%02d\033[0m   \033[2m%s\033[0m\n' "$num" "$lbl"
       fi
     done
+    ((end < total)) && printf ' \033[2m   ↓ %d\033[0m\n' "$((total - end))"
     # monitors (dynamic): windows named mon-*, jump with Prefix+their number
     local mons widx wname
     mons="$(tmux list-windows -t "$SESSION" -F '#{window_index}|#{window_name}' 2>/dev/null |
@@ -473,13 +566,15 @@ action_sidebar() {
   }
   # Repaint every 2s only when content changed (no flicker) — AND skip entirely
   # when this window isn't on screen, so 29 of 30 sidebars stay idle. Render once
-  # up front so a not-yet-viewed window's sidebar isn't blank.
+  # up front so a not-yet-viewed window's sidebar isn't blank. USR1 (sent on
+  # window switch by _sidebar_poke) forces an immediate repaint so status badges
+  # don't lag/flicker when you switch to a window.
   local _last="" self="${TMUX_PANE:-}" c
-  trap '_last=' WINCH
+  trap '_last=' WINCH # WINCH (poke on window switch / resize) forces a repaint
   _last="$(render_sidebar)"
   printf '%s' "$_last"
   while :; do
-    sleep 2
+    sleep 2 & wait $! 2>/dev/null # interruptible by USR1
     [[ "$(tmux display -p -t "$self" '#{window_active}' 2>/dev/null)" == 1 ]] || continue
     sync_lang && _last="" # language switched live → force a repaint
     c="$(render_sidebar)"
@@ -583,7 +678,37 @@ action_ssh_all() {
 }
 
 _LOGD=""
-_cb_logon() { tmux pipe-pane -t "$1" "cat >> '$_LOGD/${2}.log'"; }
+# pipe-pane target: append the pane's output to a log file as PLAIN TEXT —
+# strip ANSI colour/CSI escapes so saved logs aren't full of ^[[32m … ^[[0m.
+# Prefers ansi2txt, else perl, else sed (line-buffered where supported).
+# $1 = plain log path (foo.log)   $2 = format: plain | raw | both
+#   plain → strip ANSI, write foo.log              (default)
+#   raw   → write the original stream to foo.log    (colours kept)
+#   both  → foo.log = plain, foo.raw.log = original
+action_logfilter() {
+  local file="${1:-}" fmt="${2:-plain}"
+  local raw="${file%.log}.raw.log"
+  # stdin → stdout with ANSI stripped (CSI colour/cursor + OSC + charset + Fe)
+  _strip() {
+    if command -v ansi2txt >/dev/null 2>&1; then
+      ansi2txt
+    elif command -v perl >/dev/null 2>&1; then
+      perl -pe 'BEGIN{$|=1} s/\e\[[0-9;?]*[ -\/]*[@-~]//g; s/\e\][^\a\e]*(?:\a|\e\\)//g; s/\e[()][A-Za-z0-9]//g; s/\e[@-Z\\-_=>]//g'
+    else
+      sed "s/$(printf '\033')\[[0-9;?]*[a-zA-Z]//g"
+    fi
+  }
+  case "$fmt" in
+  raw) exec cat >>"$file" ;;                  # original session output, untouched
+  both) tee -a "$raw" | _strip >>"$file" ;;   # raw → foo.raw.log, plain → foo.log
+  *) _strip >>"$file" ;;                       # plain (default)
+  esac
+}
+_cb_logon() {
+  local fmt
+  fmt="$(tmux show-option -t "$SESSION" -qv @gtmux_logformat 2>/dev/null)"
+  tmux pipe-pane -t "$1" "'$SELF' _logfilter '$_LOGD/${2}.log' '${fmt:-plain}'"
+}
 _cb_logoff() { tmux pipe-pane -t "$1"; }
 action_log_start() {
   _LOGD="$(log_dir)" # intended log dir, set at open — create it now (lazy)
@@ -593,11 +718,37 @@ action_log_start() {
   }
   mkdir -p "$_LOGD"
   foreach_dev _cb_logon
+  tmux set-option -t "$SESSION" @gtmux_logging 1 # status-bar indicator on
+  # refresh status style/length/left so '● LOG <path>' shows now — re-asserted
+  # here so it works even on a session opened by an older build (no reopen).
+  tmux set -t "$SESSION" status-style "bg=default fg=default" 2>/dev/null || true
+  tmux set -t "$SESSION" status-left-length 200 2>/dev/null || true
+  tmux set -t "$SESSION" status-left "$(_status_left)"
   tmux display-message "$(tf log_started "$DEV_N" "$_LOGD")"
 }
 action_log_stop() {
   foreach_dev _cb_logoff
+  tmux set-option -t "$SESSION" @gtmux_logging 0 # status-bar indicator off
+  tmux set -t "$SESSION" status-left "$(_status_left)" # refresh (hides the LOG part)
   tmux display-message "$(tf log_stopped "$DEV_N")"
+}
+# Cycle the saved-log format: plain → raw → both → plain. If logging is on,
+# re-pipe every host so the change takes effect now; refresh the status badge.
+action_logformat() {
+  local cur next
+  cur="$(tmux show-option -t "$SESSION" -qv @gtmux_logformat 2>/dev/null)"
+  case "${cur:-plain}" in
+  plain) next=raw ;;
+  raw) next=both ;;
+  *) next=plain ;;
+  esac
+  tmux set-option -t "$SESSION" @gtmux_logformat "$next"
+  if [[ "$(tmux show-option -t "$SESSION" -qv @gtmux_logging 2>/dev/null)" == 1 ]]; then
+    _LOGD="$(log_dir)"
+    foreach_dev _cb_logon # re-pipe with the new format
+  fi
+  tmux set -t "$SESSION" status-left "$(_status_left)"
+  tmux display-message "$(tf logfmt_set "$next")"
 }
 
 action_clean() {
@@ -752,27 +903,59 @@ action_logpath() {
   set_log_dir "$d"
   _LOGD="$d"
   foreach_dev _cb_logon
+  tmux set-option -t "$SESSION" @gtmux_logging 1 # changing path (re)starts logging
   tmux display-message "$(tf logpath_changed "$d" "$DEV_N")"
 }
 
 # ---- key bindings -----------------------------------------------------------
 
 # Re-fit every window's sidebar to the current terminal width (resize hook).
+# Poke the active window's sidebar to re-render now — used on window switch so
+# status badges (LOG/MODE) appear immediately instead of after the next 2s poll.
+# Uses SIGWINCH (the sidebar traps it); WINCH's default disposition is "ignore",
+# so it can never kill a sidebar that hasn't installed its trap yet.
+# Redraw the status line for the client viewing this session, if any. Targets
+# the client explicitly (bare `refresh-client` errors "no current client" when
+# run with no attached client, e.g. from a background hook at open time).
+_refresh_status() {
+  local cl
+  cl="$(tmux list-clients -t "$SESSION" -F '#{client_name}' 2>/dev/null | head -1)"
+  [[ -n "$cl" ]] && tmux refresh-client -S -t "$cl" 2>/dev/null || true
+}
+
+action_sidebar_poke() {
+  local win pid
+  win="$(tmux display -p -t "$SESSION" '#{window_id}' 2>/dev/null)"
+  [[ -n "$win" ]] || return 0
+  pid="$(tmux list-panes -t "$win" -F '#{@gtmux}|#{pane_pid}' 2>/dev/null |
+    awk -F'|' '$1=="side"{print $2}')"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -WINCH "$pid" 2>/dev/null || true
+  _refresh_status # repaint status bar too (WSL doesn't on switch)
+}
+
+# Normalize EVERY window to the current client size, then set its sidebar width.
+# tmux drifts a pane's width whenever the window resizes (it doesn't keep the
+# ratio), and a window resizes to the client the moment it's shown — so building
+# at one width and viewing at another balloons the sidebar. The robust fix:
+# pin every window to the client size up front and switch to window-size MANUAL
+# so nothing auto-resizes (hence nothing drifts) afterwards. Runs when entering
+# the session (attach / switch-client) and on real terminal resize. Verified to
+# give a stable, correct sidebar even when the build width was wrong.
 action_relayout() {
-  # Reference width = the attached client's, not each window's (which can be a
-  # stale build-time size). Falls back to the active window's width.
-  local cw cols win side
+  local cw ch sb win side
   cw="$(tmux display -p -t "$SESSION" '#{client_width}' 2>/dev/null)"
-  [[ "$cw" =~ ^[0-9]+$ ]] && ((cw >= 20)) ||
-    cw="$(tmux display -p -t "$SESSION" '#{window_width}' 2>/dev/null)"
+  ch="$(tmux display -p -t "$SESSION" '#{client_height}' 2>/dev/null)"
   [[ "$cw" =~ ^[0-9]+$ ]] && ((cw >= 20)) || return 0
-  cols="$(_sidebar_cols "$cw")"
+  [[ "$ch" =~ ^[0-9]+$ ]] && ((ch >= 4)) || ch=24
+  sb="$(_sidebar_cols "$cw")"
+  tmux set-option -t "$SESSION" window-size manual 2>/dev/null || true
   while read -r win; do
+    tmux resize-window -t "$win" -x "$cw" -y "$ch" 2>/dev/null || true
     side="$(tmux list-panes -t "$win" -F '#{pane_id}|#{@gtmux}' 2>/dev/null |
       awk -F'|' '$2=="side"{print $1}')"
-    [[ -n "$side" ]] || continue
-    tmux resize-pane -t "$side" -x "$cols" 2>/dev/null || true
+    [[ -n "$side" ]] && tmux resize-pane -t "$side" -x "$sb" 2>/dev/null || true
   done < <(tmux list-windows -t "$SESSION" -F '#{window_id}')
+  _refresh_status # redraw status (● LOG path) on re-focus
 }
 
 # Live language switch from the menu. Stores the choice on the session so the
@@ -791,7 +974,7 @@ action_setlang() {
   tmux set-option -t "$SESSION" @gtmux_lang "$new"
   tmux set-environment -t "$SESSION" GTMUX_LANG "$new"
   bind_keys
-  tmux set -t "$SESSION" status-right "#{?#{==:#{client_key_table},gtmux},#[reverse] GTMUX #[noreverse] ,}$(tf status_right "$MENU_KEY")"
+  tmux set -t "$SESSION" status-right "$(_status_right)"
   tmux display-message "$(tf lang_set "$new")"
 }
 
@@ -819,7 +1002,7 @@ bind_keys() {
   # Prefix g → enter sticky GTMUX mode (Vim-normal-like: keys without prefix).
   # display-message -- so the leading "--" in the hint isn't taken as a flag.
   tmux bind-key -T prefix g \
-    "set -t $SESSION key-table gtmux ; display-message -- \"$(t mode_on)\""
+    "set -t $SESSION key-table gtmux ; set -t $SESSION @gtmux_mode 1 ; display-message -- \"$(t mode_on)\""
 
   tmux bind-key -T prefix Up previous-window
   tmux bind-key -T prefix Down next-window
@@ -840,7 +1023,7 @@ bind_keys() {
   tmux bind-key -T prefix M run-shell "$SELF _monitor_close '#{window_id}' '#{window_name}'"
   # menu
   tmux bind-key "$MENU_KEY" display-menu -T "#[align=centre] gtmux " \
-    "$(t m_mode)" g "set -t $SESSION key-table gtmux ; display-message -- '$(t mode_on)'" \
+    "$(t m_mode)" g "set -t $SESSION key-table gtmux ; set -t $SESSION @gtmux_mode 1 ; display-message -- '$(t mode_on)'" \
     "" \
     "$(t m_bcast_send)" b "command-prompt -p '$(t p_bcast_send)' \"run-shell -b '$SELF _bcast 1 \\\"%%\\\"'\"" \
     "$(t m_bcast_nosend)" B "command-prompt -p '$(t p_bcast_nosend)' \"run-shell -b '$SELF _bcast 0 \\\"%%\\\"'\"" \
@@ -857,6 +1040,7 @@ bind_keys() {
     "$(t m_log_start)" l "run-shell -b '$SELF _log_start'" \
     "$(t m_log_stop)" s "run-shell -b '$SELF _log_stop'" \
     "$(t m_logpath)" L "command-prompt -p '$(t p_logpath)' \"run-shell -b '$SELF _logpath \\\"%%\\\"'\"" \
+    "$(t m_logfmt)" f "run-shell -b '$SELF _logformat'" \
     "$(t m_clean)" C "run-shell -b '$SELF _clean'" \
     "$(t m_lang)" i "run-shell -b '$SELF _setlang toggle \"#{session_name}\"'" \
     "" \
@@ -877,8 +1061,8 @@ bind_mode() {
   tmux unbind-key -a -q -T $tbl 2>/dev/null || true # clear stale bindings (table is global)
   # leave mode: Esc / q only. Enter does NOTHING (stays in mode) so it can't
   # blast Enter to hosts nor surprise-exit — handled by the Any catch-all below.
-  tmux bind-key -T $tbl Escape "set -t $SESSION key-table root"
-  tmux bind-key -T $tbl q "set -t $SESSION key-table root"
+  tmux bind-key -T $tbl Escape "set -t $SESSION key-table root ; set -t $SESSION @gtmux_mode 0 ; refresh-client -S"
+  tmux bind-key -T $tbl q "set -t $SESSION key-table root ; set -t $SESSION @gtmux_mode 0 ; refresh-client -S"
   # jump to host by number: 1-9 directly, ' for >=10 (then stay)
   for d in 1 2 3 4 5 6 7 8 9; do
     tmux bind-key -T $tbl "$d" "select-window -t $SESSION:$d ; $stay"
@@ -922,7 +1106,7 @@ open)
 attach) tmux attach -t "$SESSION" ;;
 kill) tmux kill-session -t "$SESSION" 2>/dev/null && echo killed || t no_session ;;
 rebind) bind_keys && t rebound && echo ;;
-help | -h | --help) sed -n '2,33p' "$SELF" | sed 's/^#\{0,1\} \{0,1\}//' ;;
+help | -h | --help) sed -n '2,35p' "$SELF" | sed 's/^#\{0,1\} \{0,1\}//' ;;
 _sidebar)
   shift
   action_sidebar "$@"
@@ -938,6 +1122,11 @@ _bcastkey)
   ;;
 _ssh_all) action_ssh_all ;;
 _log_start) action_log_start ;;
+_logformat) action_logformat ;;
+_logfilter)
+  shift
+  action_logfilter "$@"
+  ;;
 _log_stop) action_log_stop ;;
 _clean) action_clean ;;
 _toggle_side)
@@ -946,6 +1135,7 @@ _toggle_side)
   ;;
 _toggle_side_all) action_toggle_side_all ;;
 _relayout) action_relayout ;;
+_sidebar_poke) action_sidebar_poke ;;
 _monitor)
   shift
   action_monitor "$@"
