@@ -1,0 +1,8 @@
+# gtmux host list — copy to ip.txt and edit.
+# One host per line. Anything after # is a comment.
+# The label can be an IP or any name (used for the sidebar + log filenames).
+10.0.0.2
+10.0.0.3
+10.0.0.4
+# dut-a
+# dut-b
